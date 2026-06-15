@@ -1,5 +1,5 @@
 /**
- * Roche 悬浮球插件 v2.2.0
+ * Roche 悬浮球插件 v2.3.0
  * 
  * 功能：
  * 1. 悬浮球全局可用（不随插件页面切换消失）
@@ -14,7 +14,7 @@
 window.RochePlugin.register({
   id: "floating-ball",
   name: "悬浮球",
-  version: "2.2.0",
+  version: "2.3.0",
   apps: [
     {
       id: "floating-ball-main",
@@ -174,26 +174,57 @@ window.RochePlugin.register({
         // 这样走的是Roche完整流程：persona + memory + worldbook + AI回复
 
         function navigateToConversation(convId) {
-          // 关闭插件App（回到上一页），然后尝试URL hash导航
+          // 关闭插件App，回到主界面
           roche.ui.closeApp();
 
-          // 等页面恢复后，尝试多种导航方式
+          // 等主界面恢复后，尝试多种导航方式
           setTimeout(function() {
-            // 尝试URL hash导航（Roche是SPA，可能用hash路由）
-            var hash = '#/chat/' + convId;
-            if (window.location.hash !== hash) {
-              window.location.hash = hash;
-            }
+            // 方法1：尝试Vue Router（如果Roche暴露了路由实例）
+            try {
+              var app = document.querySelector('#app');
+              if (app && app.__vue_app__) {
+                var router = app.__vue_app__.config.globalProperties.$router;
+                if (router) {
+                  router.push('/chat/' + convId);
+                  return;
+                }
+              }
+            } catch(e) {}
 
-            // 也尝试pushState（有些SPA用history模式）
-            var path = '/chat/' + convId;
-            if (window.location.pathname !== path) {
-              try { window.history.pushState({}, '', path); } catch(e) {}
-            }
+            // 方法2：在会话列表中找到目标会话并点击
+            tryClickConversation(convId);
+          }, 500);
+        }
 
-            // 触发popstate事件让SPA路由响应
-            window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-          }, 300);
+        function tryClickConversation(convId, retryCount) {
+          retryCount = retryCount || 0;
+          // 查找会话列表项
+          var items = document.querySelectorAll('.conversation-item');
+          if (items.length === 0 && retryCount < 10) {
+            // 列表还没加载，等一下重试
+            setTimeout(function() { tryClickConversation(convId, retryCount + 1); }, 300);
+            return;
+          }
+          // 遍历找到目标会话（通过data属性或内部链接）
+          for (var i = 0; i < items.length; i++) {
+            var item = items[i];
+            if (item.getAttribute('data-conversation-id') === convId ||
+                item.getAttribute('data-id') === convId ||
+                item.getAttribute('data-key') === convId) {
+              item.click();
+              return;
+            }
+          }
+          // 没找到精确匹配，尝试通过内部链接匹配
+          var links = document.querySelectorAll('.conversation-item a[href*="' + convId + '"]');
+          if (links.length > 0) { links[0].click(); return; }
+
+          // 兜底：重试或提示
+          if (retryCount < 10) {
+            setTimeout(function() { tryClickConversation(convId, retryCount + 1); }, 300);
+          } else {
+            roche.ui.toast('无法自动跳转，请手动打开会话');
+          }
         }
 
         function triggerNativeReply(convId, text) {
@@ -431,13 +462,11 @@ window.RochePlugin.register({
 
           if (mode === 'native') {
             // 模式1：触发AI原生回复
-            // 先在聊天面板显示"等待中"
             state.chatMessages.push({ isMe: true, text: text });
             state.chatMessages.push({ type: 'waiting', text: '\u23f3 \u5df2\u53d1\u9001\uff0c\u7b49\u5f85AI\u56de\u590d...' });
             renderChatMessages();
 
             triggerNativeReply(state.conversationId, text).then(function() {
-              // 发送成功，移除等待提示
               state.chatMessages = state.chatMessages.filter(function(m) { return m.type !== 'waiting'; });
               state.chatMessages.push({ isMe: false, text: '\u2705 \u5df2\u89e6\u53d1AI\u56de\u590d\uff0c\u8bf7\u5728\u804a\u5929\u754c\u9762\u67e5\u770b' });
               renderChatMessages();
@@ -462,7 +491,7 @@ window.RochePlugin.register({
 
         function render() {
           root.innerHTML = '';
-          var h2 = document.createElement('h2'); h2.textContent = '\u60ac\u6d6e\u7403 v2.2'; root.appendChild(h2);
+          var h2 = document.createElement('h2'); h2.textContent = '\u60ac\u6d6e\u7403 v2.3'; root.appendChild(h2);
 
           // --- 关闭App按钮 ---
           var closeBtn = document.createElement('button');
@@ -609,15 +638,12 @@ window.RochePlugin.register({
           }
         }).then(function() {
           render();
-          // 如果之前悬浮球是显示的，恢复它
           if (state.ballVisible) ensureBall();
         });
       },
 
       async unmount(container, roche) {
         // 关键：不删除悬浮球！只清理插件设置页面的DOM
-        var style = document.getElementById('roche-plugin-floating-ball-style');
-        // 不删除style，因为悬浮球还需要
         container.replaceChildren();
       }
     }
