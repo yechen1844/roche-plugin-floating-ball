@@ -1,13 +1,20 @@
 /**
- * Roche 悬浮球插件 v1.0.0
- * 功能：悬浮球快速操作 - 与char对话、注入消息、跳转会话
+ * Roche 悬浮球插件 v2.0.0
+ * 
+ * 功能：
+ * 1. 悬浮球全局可用（不随插件页面切换消失）
+ * 2. 注入用户消息 / 角色消息 / 系统消息
+ * 3. 触发AI原生回复（DOM自动发送，走Roche完整流程）
+ * 4. 跳转会话
+ * 5. 记忆读写
+ * 
  * 基于 RocheToolkit 逆向的 IndexedDB 结构
  */
 
 window.RochePlugin.register({
   id: "floating-ball",
   name: "悬浮球",
-  version: "1.0.0",
+  version: "2.0.0",
   apps: [
     {
       id: "floating-ball-main",
@@ -36,10 +43,12 @@ window.RochePlugin.register({
           .roche-plugin-floating-ball textarea { min-height: 60px; resize: vertical; }
           .roche-plugin-floating-ball .btn {
             display: inline-block; padding: 8px 16px; border-radius: 8px; border: none;
-            font-size: 14px; cursor: pointer; margin-right: 8px; margin-bottom: 8px;
+            font-size: 14px; cursor: pointer; margin-right: 6px; margin-bottom: 6px;
           }
           .roche-plugin-floating-ball .btn-primary { background: var(--accent); color: #fff; }
           .roche-plugin-floating-ball .btn-secondary { background: var(--blue); color: #fff; }
+          .roche-plugin-floating-ball .btn-green { background: #1a6a3a; color: #fff; }
+          .roche-plugin-floating-ball .btn-orange { background: #a85a1a; color: #fff; }
           .roche-plugin-floating-ball .btn:disabled { opacity: 0.4; cursor: not-allowed; }
           .roche-plugin-floating-ball .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
           .roche-plugin-floating-ball .status-on { background: #1a4a2e; color: #4ade80; }
@@ -51,29 +60,53 @@ window.RochePlugin.register({
           .roche-plugin-floating-ball .char-list-item.selected { background: var(--blue); }
           .roche-plugin-floating-ball .char-avatar { width: 32px; height: 32px; border-radius: 50%; margin-right: 10px; object-fit: cover; }
           .roche-plugin-floating-ball .char-name { font-size: 14px; }
-          .fb-ball {
+          .roche-plugin-floating-ball .divider { border-top: 1px solid #2a2a3e; margin: 12px 0; }
+          /* 悬浮球 - 全局 */
+          #fb-global-ball {
             position: fixed; width: 48px; height: 48px; border-radius: 50%;
             background: #e94560; color: #fff; display: flex; align-items: center; justify-content: center;
             font-size: 20px; cursor: pointer; z-index: 99999;
             box-shadow: 0 2px 12px rgba(233,69,96,0.4); user-select: none; transition: transform 0.2s;
           }
-          .fb-ball:hover { transform: scale(1.1); }
-          .fb-chat-panel {
-            position: fixed; width: 300px; max-height: 400px; background: #141420;
+          #fb-global-ball:hover { transform: scale(1.1); }
+          /* 聊天面板 - 全局 */
+          #fb-global-chat {
+            position: fixed; width: 320px; max-height: 440px; background: #141420;
             border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.6); z-index: 99998;
             display: flex; flex-direction: column; overflow: hidden;
           }
-          .fb-chat-header { padding: 10px 14px; background: #1a1a2e; display: flex; align-items: center; justify-content: space-between; }
-          .fb-chat-body { flex: 1; overflow-y: auto; padding: 10px; max-height: 280px; }
-          .fb-chat-footer { padding: 8px; display: flex; gap: 6px; background: #1a1a2e; }
-          .fb-chat-footer input { flex: 1; margin: 0; }
+          #fb-global-chat .chat-header { padding: 10px 14px; background: #1a1a2e; display: flex; align-items: center; justify-content: space-between; }
+          #fb-global-chat .chat-body { flex: 1; overflow-y: auto; padding: 10px; max-height: 300px; }
+          #fb-global-chat .chat-footer { padding: 8px; display: flex; gap: 6px; background: #1a1a2e; flex-wrap: wrap; }
+          #fb-global-chat .chat-footer input { flex: 1; min-width: 120px; margin: 0; background: #1a1a2e; border: 1px solid #2a2a3e; border-radius: 8px; color: #e0e0e0; padding: 8px 12px; font-size: 14px; }
+          #fb-global-chat .chat-footer .fb-btn { padding: 6px 12px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px; color: #fff; }
+          #fb-global-chat .fb-btn-send { background: #e94560; }
+          #fb-global-chat .fb-btn-native { background: #1a6a3a; }
+          #fb-global-chat .fb-btn-inject { background: #0f3460; }
           .fb-bubble { padding: 8px 12px; border-radius: 12px; margin-bottom: 6px; font-size: 13px; max-width: 85%; word-break: break-word; }
           .fb-bubble-char { background: #16213e; }
           .fb-bubble-user { background: #0f3460; margin-left: auto; }
+          .fb-bubble-system { background: #2a1a3a; color: #c0a0e0; font-style: italic; margin: 0 auto; text-align: center; max-width: 95%; }
+          .fb-bubble-waiting { background: #1a1a2e; color: #888; font-style: italic; margin: 0 auto; text-align: center; max-width: 95%; }
         `;
         document.head.appendChild(style);
 
-        var state = { selectedCharId: null, selectedChar: null, conversationId: null, ballVisible: false, chatMessages: [], db: null };
+        // ========== 全局状态（存在window上，不随unmount丢失） ==========
+        if (!window.__fbState) {
+          window.__fbState = {
+            selectedCharId: null,
+            selectedChar: null,
+            conversationId: null,
+            ballVisible: false,
+            chatOpen: false,
+            chatMessages: [],
+            db: null,
+            initialized: false
+          };
+        }
+        var state = window.__fbState;
+
+        // ========== IndexedDB 操作 ==========
         var DB_NAME = 'Roche_db';
 
         function openDB() {
@@ -122,19 +155,290 @@ window.RochePlugin.register({
           });
         }
 
+        function injectSystemNotice(convId, text, kind) {
+          var now = Date.now();
+          var msg = {
+            id: now + Math.floor(Math.random() * 1000), isMe: false, text: text, type: 'system_notice',
+            timestamp: now, conversationId: convId, systemNoticeKind: kind || 'info',
+            senderName: 'System', senderId: '__system__',
+            isGenerating: false, isStreaming: false, sendFailed: false
+          };
+          return addRecord('messages', msg).then(function(id) {
+            window.dispatchEvent(new CustomEvent('roche-data-changed', { detail: { source: 'floating-ball' } }));
+            return id;
+          });
+        }
+
+        // ========== 触发AI原生回复（核心功能） ==========
+        // 流程：跳转到会话 → 等待加载 → 找到输入框 → 输入文字 → 点击发送
+        // 这样走的是Roche完整流程：persona + memory + worldbook + AI回复
+
+        function triggerNativeReply(convId, text) {
+          return new Promise(function(resolve, reject) {
+            // 第1步：跳转到会话
+            roche.ui.openApp(convId);
+
+            // 第2步：等待聊天页面加载，然后找到输入框并发送
+            var attempts = 0;
+            var maxAttempts = 20; // 最多等4秒
+
+            function trySend() {
+              attempts++;
+              var input = findChatInput();
+              if (input) {
+                typeAndSend(input, text);
+                resolve({ success: true, method: 'native' });
+                return;
+              }
+              if (attempts < maxAttempts) {
+                setTimeout(trySend, 200);
+              } else {
+                reject(new Error('找不到聊天输入框，请确认已打开会话'));
+              }
+            }
+
+            setTimeout(trySend, 500);
+          });
+        }
+
+        function findChatInput() {
+          // 多种选择器尝试，适配不同版本的Roche
+          var selectors = [
+            'textarea[class*="input"]',
+            'textarea[class*="chat"]',
+            'textarea[class*="compose"]',
+            'textarea[placeholder]',
+            '[contenteditable="true"]',
+            'textarea',
+            'input[type="text"][class*="chat"]',
+            'input[type="text"][class*="input"]'
+          ];
+          for (var i = 0; i < selectors.length; i++) {
+            var el = document.querySelector(selectors[i]);
+            if (el && el.offsetParent !== null) return el; // 确保可见
+          }
+          return null;
+        }
+
+        function findSendButton() {
+          var selectors = [
+            'button[class*="send"]',
+            'button[class*="submit"]',
+            '[class*="send-icon"]',
+            '[class*="send-btn"]',
+            'button[aria-label*="send"]',
+            'button[aria-label*="发送"]'
+          ];
+          for (var i = 0; i < selectors.length; i++) {
+            var el = document.querySelector(selectors[i]);
+            if (el && el.offsetParent !== null) return el;
+          }
+          return null;
+        }
+
+        function typeAndSend(input, text) {
+          input.focus();
+
+          if (input.tagName === 'TEXTAREA' || input.type === 'text') {
+            // 用原生setter设值，触发Vue响应式
+            var setter = Object.getOwnPropertyDescriptor(
+              window.HTMLTextAreaElement.prototype, 'value'
+            ) || Object.getOwnPropertyDescriptor(
+              window.HTMLInputElement.prototype, 'value'
+            );
+            if (setter) setter.call(input, text);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          } else {
+            // contenteditable div
+            input.innerText = text;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+
+          // 等一下让UI响应，然后点发送
+          setTimeout(function() {
+            var sendBtn = findSendButton();
+            if (sendBtn) {
+              sendBtn.click();
+            } else {
+              // 没找到发送按钮，按Enter
+              input.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+              }));
+            }
+          }, 300);
+        }
+
+        // ========== 悬浮球 DOM（全局，不随插件unmount消失） ==========
+
+        function ensureBall() {
+          if (document.getElementById('fb-global-ball')) return;
+          var ball = document.createElement('div');
+          ball.id = 'fb-global-ball';
+          ball.textContent = '💬';
+
+          var ballX = parseInt(localStorage.getItem('fb-ball-x')) || (window.innerWidth - 70);
+          var ballY = parseInt(localStorage.getItem('fb-ball-y')) || Math.floor(window.innerHeight / 2);
+          ball.style.left = ballX + 'px';
+          ball.style.top = ballY + 'px';
+
+          // 拖拽 + 点击
+          var isDragging = false, startX, startY, startLeft, startTop;
+
+          function onDown(x, y) {
+            isDragging = false; startX = x; startY = y; startLeft = ballX; startTop = ballY;
+          }
+          function onMove(x, y) {
+            var dx = x - startX, dy = y - startY;
+            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) isDragging = true;
+            ballX = startLeft + dx; ballY = startTop + dy;
+            ball.style.left = ballX + 'px'; ball.style.top = ballY + 'px';
+          }
+          function onUp() {
+            if (ballX < window.innerWidth / 2) ballX = 10; else ballX = window.innerWidth - 58;
+            ball.style.left = ballX + 'px';
+            localStorage.setItem('fb-ball-x', ballX);
+            localStorage.setItem('fb-ball-y', ballY);
+            if (!isDragging) toggleChat();
+          }
+
+          ball.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            onDown(e.clientX, e.clientY);
+            function m(e2) { onMove(e2.clientX, e2.clientY); }
+            function u() { document.removeEventListener('mousemove', m); document.removeEventListener('mouseup', u); onUp(); }
+            document.addEventListener('mousemove', m);
+            document.addEventListener('mouseup', u);
+          });
+
+          ball.addEventListener('touchstart', function(e) {
+            var t = e.touches[0]; onDown(t.clientX, t.clientY);
+            function m(e2) { var t2 = e2.touches[0]; onMove(t2.clientX, t2.clientY); }
+            function u() { document.removeEventListener('touchmove', m); document.removeEventListener('touchend', u); onUp(); }
+            document.addEventListener('touchmove', m);
+            document.addEventListener('touchend', u);
+          });
+
+          document.body.appendChild(ball);
+          state.ballVisible = true;
+        }
+
+        function removeBall() {
+          var ball = document.getElementById('fb-global-ball');
+          if (ball) ball.remove();
+          removeChat();
+          state.ballVisible = false;
+        }
+
+        function toggleChat() {
+          if (document.getElementById('fb-global-chat')) removeChat();
+          else showChat();
+        }
+
+        function showChat() {
+          if (document.getElementById('fb-global-chat')) return;
+          if (!state.selectedChar) {
+            // 没选角色，跳转到插件设置页
+            roche.ui.openApp('floating-ball-main');
+            return;
+          }
+
+          var panel = document.createElement('div');
+          panel.id = 'fb-global-chat';
+          panel.style.right = '10px';
+          panel.style.bottom = '70px';
+          var cn = state.selectedChar.handle || state.selectedChar.name || 'Char';
+          panel.innerHTML =
+            '<div class="chat-header">' +
+              '<span style="font-size:14px;font-weight:bold;color:#e0e0e0;">' + cn + '</span>' +
+              '<span style="cursor:pointer;font-size:18px;color:#888;" id="fb-chat-close">\u2715</span>' +
+            '</div>' +
+            '<div class="chat-body" id="fb-chat-body"></div>' +
+            '<div class="chat-footer">' +
+              '<input type="text" id="fb-chat-input" placeholder="\u8f93\u5165\u6d88\u606f...">' +
+              '<button class="fb-btn fb-btn-send" id="fb-chat-send" title="\u6ce8\u5165\u7528\u6237\u6d88\u606f">\u6ce8\u5165</button>' +
+              '<button class="fb-btn fb-btn-native" id="fb-chat-native" title="\u89e6\u53d1AI\u539f\u751f\u56de\u590d\uff08\u8d70Roche\u5b8c\u6574\u6d41\u7a0b\uff09">AI\u56de\u590d</button>' +
+            '</div>';
+          document.body.appendChild(panel);
+
+          panel.querySelector('#fb-chat-close').onclick = removeChat;
+          panel.querySelector('#fb-chat-send').onclick = function() { sendChatMessage('inject'); };
+          panel.querySelector('#fb-chat-native').onclick = function() { sendChatMessage('native'); };
+          panel.querySelector('#fb-chat-input').onkeydown = function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage('native'); }
+          };
+          renderChatMessages();
+        }
+
+        function removeChat() {
+          var panel = document.getElementById('fb-global-chat');
+          if (panel) panel.remove();
+        }
+
+        function renderChatMessages() {
+          var body = document.getElementById('fb-chat-body');
+          if (!body) return;
+          body.innerHTML = '';
+          state.chatMessages.forEach(function(m) {
+            var b = document.createElement('div');
+            if (m.type === 'system') b.className = 'fb-bubble fb-bubble-system';
+            else if (m.type === 'waiting') b.className = 'fb-bubble fb-bubble-waiting';
+            else b.className = 'fb-bubble ' + (m.isMe ? 'fb-bubble-user' : 'fb-bubble-char');
+            b.textContent = m.text;
+            body.appendChild(b);
+          });
+          body.scrollTop = body.scrollHeight;
+        }
+
+        function sendChatMessage(mode) {
+          var input = document.getElementById('fb-chat-input');
+          if (!input) return;
+          var text = input.value.trim();
+          if (!text || !state.conversationId) return;
+          input.value = '';
+
+          if (mode === 'native') {
+            // 模式1：触发AI原生回复
+            // 先在聊天面板显示"等待中"
+            state.chatMessages.push({ isMe: true, text: text });
+            state.chatMessages.push({ type: 'waiting', text: '\u23f3 \u5df2\u53d1\u9001\uff0c\u7b49\u5f85AI\u56de\u590d...' });
+            renderChatMessages();
+
+            triggerNativeReply(state.conversationId, text).then(function() {
+              // 发送成功，移除等待提示
+              state.chatMessages = state.chatMessages.filter(function(m) { return m.type !== 'waiting'; });
+              state.chatMessages.push({ isMe: false, text: '\u2705 \u5df2\u89e6\u53d1AI\u56de\u590d\uff0c\u8bf7\u5728\u804a\u5929\u754c\u9762\u67e5\u770b' });
+              renderChatMessages();
+            }).catch(function(err) {
+              state.chatMessages = state.chatMessages.filter(function(m) { return m.type !== 'waiting'; });
+              state.chatMessages.push({ type: 'system', text: '\u274c ' + err.message });
+              renderChatMessages();
+            });
+          } else {
+            // 模式2：仅注入消息（不触发AI）
+            state.chatMessages.push({ isMe: true, text: text });
+            renderChatMessages();
+            injectUserMessage(state.conversationId, text).then(function() {
+              roche.ui.toast('\u7528\u6237\u6d88\u606f\u5df2\u6ce8\u5165');
+            });
+          }
+        }
+
+        // ========== 渲染设置界面 ==========
         container.innerHTML = '<div class="roche-plugin-floating-ball"></div>';
         var root = container.querySelector('.roche-plugin-floating-ball');
 
         function render() {
           root.innerHTML = '';
-          var h2 = document.createElement('h2'); h2.textContent = '悬浮球'; root.appendChild(h2);
+          var h2 = document.createElement('h2'); h2.textContent = '\u60ac\u6d6e\u7403 v2.0'; root.appendChild(h2);
 
+          // --- 选择角色 ---
           var charSection = document.createElement('div'); charSection.className = 'section';
-          charSection.innerHTML = '<div class="section-title">选择角色</div><div id="fb-char-list">加载中...</div>';
+          charSection.innerHTML = '<div class="section-title">\u9009\u62e9\u89d2\u8272</div><div id="fb-char-list">\u52a0\u8f7d\u4e2d...</div>';
           root.appendChild(charSection);
           roche.character.list().then(function(chars) {
             var listEl = charSection.querySelector('#fb-char-list');
-            if (!chars || chars.length === 0) { listEl.textContent = '暂无角色'; return; }
+            if (!chars || chars.length === 0) { listEl.textContent = '\u6682\u65e0\u89d2\u8272'; return; }
             listEl.innerHTML = '';
             chars.forEach(function(c) {
               var item = document.createElement('div');
@@ -151,161 +455,129 @@ window.RochePlugin.register({
             });
           });
 
+          // --- 悬浮球控制 ---
           var ballSection = document.createElement('div'); ballSection.className = 'section';
-          var bs = state.ballVisible ? '<span class="status status-on">显示中</span>' : '<span class="status status-off">隐藏</span>';
-          ballSection.innerHTML = '<div class="section-title">悬浮球 ' + bs + '</div><button class="btn btn-primary" id="fb-toggle-ball">' + (state.ballVisible ? '隐藏悬浮球' : '显示悬浮球') + '</button>';
+          var bs = state.ballVisible ? '<span class="status status-on">\u663e\u793a\u4e2d</span>' : '<span class="status status-off">\u9690\u85cf</span>';
+          ballSection.innerHTML = '<div class="section-title">\u60ac\u6d6e\u7403 ' + bs + '</div>' +
+            '<button class="btn btn-primary" id="fb-toggle-ball">' + (state.ballVisible ? '\u9690\u85cf\u60ac\u6d6e\u7403' : '\u663e\u793a\u60ac\u6d6e\u7403') + '</button>';
           root.appendChild(ballSection);
           ballSection.querySelector('#fb-toggle-ball').onclick = function() {
-            state.ballVisible = !state.ballVisible;
-            if (state.ballVisible) showFloatingBall(); else hideFloatingBall(); render();
+            if (state.ballVisible) removeBall(); else ensureBall();
+            render();
           };
 
-          var actionSection = document.createElement('div'); actionSection.className = 'section';
+          // --- 消息注入 ---
           var dis = state.conversationId ? '' : ' disabled';
-          actionSection.innerHTML = '<div class="section-title">快速操作</div><label>消息内容</label>' +
-            '<textarea id="fb-msg-text" placeholder="输入要注入的消息..."></textarea>' +
-            '<button class="btn btn-primary" id="fb-inject-user"' + dis + '>注入用户消息</button>' +
-            '<button class="btn btn-secondary" id="fb-inject-char"' + dis + '>注入角色消息</button>' +
-            '<button class="btn btn-secondary" id="fb-auto-send"' + dis + '>DOM自动发送</button>' +
-            '<button class="btn btn-secondary" id="fb-jump"' + dis + '>跳转到会话</button>';
-          root.appendChild(actionSection);
+          var msgSection = document.createElement('div'); msgSection.className = 'section';
+          msgSection.innerHTML = '<div class="section-title">\u6d88\u606f\u6ce8\u5165</div>' +
+            '<label>\u6d88\u606f\u5185\u5bb9</label>' +
+            '<textarea id="fb-msg-text" placeholder="\u8f93\u5165\u8981\u6ce8\u5165\u7684\u6d88\u606f..."></textarea>' +
+            '<button class="btn btn-primary" id="fb-inject-user"' + dis + '>\u6ce8\u5165\u7528\u6237\u6d88\u606f</button>' +
+            '<button class="btn btn-secondary" id="fb-inject-char"' + dis + '>\u6ce8\u5165\u89d2\u8272\u6d88\u606f</button>' +
+            '<button class="btn btn-orange" id="fb-inject-system"' + dis + '>\u6ce8\u5165\u7cfb\u7edf\u6d88\u606f</button>' +
+            '<div class="divider"></div>' +
+            '<label>\u7cfb\u7edf\u6d88\u606f\u7c7b\u578b</label>' +
+            '<select id="fb-sys-kind">' +
+              '<option value="info">info - \u4fe1\u606f</option>' +
+              '<option value="friend_request">friend_request - \u597d\u53cb\u8bf7\u6c42</option>' +
+              '<option value="group_created">group_created - \u7fa4\u7ec4\u521b\u5efa</option>' +
+              '<option value="call">call - \u7535\u8bdd</option>' +
+            '</select>';
+          root.appendChild(msgSection);
 
-          actionSection.querySelector('#fb-inject-user').onclick = function() {
-            var text = actionSection.querySelector('#fb-msg-text').value.trim();
+          msgSection.querySelector('#fb-inject-user').onclick = function() {
+            var text = msgSection.querySelector('#fb-msg-text').value.trim();
             if (!text || !state.conversationId) return;
-            injectUserMessage(state.conversationId, text).then(function() { roche.ui.toast('用户消息已注入'); actionSection.querySelector('#fb-msg-text').value = ''; });
+            injectUserMessage(state.conversationId, text).then(function() { roche.ui.toast('\u7528\u6237\u6d88\u606f\u5df2\u6ce8\u5165'); msgSection.querySelector('#fb-msg-text').value = ''; });
           };
-          actionSection.querySelector('#fb-inject-char').onclick = function() {
-            var text = actionSection.querySelector('#fb-msg-text').value.trim();
+          msgSection.querySelector('#fb-inject-char').onclick = function() {
+            var text = msgSection.querySelector('#fb-msg-text').value.trim();
             if (!text || !state.conversationId || !state.selectedChar) return;
-            injectCharMessage(state.conversationId, text, state.selectedChar.handle || state.selectedChar.name, state.selectedCharId).then(function() { roche.ui.toast('角色消息已注入'); actionSection.querySelector('#fb-msg-text').value = ''; });
+            injectCharMessage(state.conversationId, text, state.selectedChar.handle || state.selectedChar.name, state.selectedCharId).then(function() { roche.ui.toast('\u89d2\u8272\u6d88\u606f\u5df2\u6ce8\u5165'); msgSection.querySelector('#fb-msg-text').value = ''; });
           };
-          actionSection.querySelector('#fb-auto-send').onclick = function() {
-            var text = actionSection.querySelector('#fb-msg-text').value.trim();
-            if (!text) return;
-            if (state.conversationId) roche.ui.openApp(state.conversationId);
-            setTimeout(function() { autoTypeAndSend(text); }, 1000);
+          msgSection.querySelector('#fb-inject-system').onclick = function() {
+            var text = msgSection.querySelector('#fb-msg-text').value.trim();
+            var kind = msgSection.querySelector('#fb-sys-kind').value;
+            if (!text || !state.conversationId) return;
+            injectSystemNotice(state.conversationId, text, kind).then(function() { roche.ui.toast('\u7cfb\u7edf\u6d88\u606f\u5df2\u6ce8\u5165'); msgSection.querySelector('#fb-msg-text').value = ''; });
           };
-          actionSection.querySelector('#fb-jump').onclick = function() { if (state.conversationId) roche.ui.openApp(state.conversationId); };
 
+          // --- AI原生回复 ---
           var aiSection = document.createElement('div'); aiSection.className = 'section';
-          aiSection.innerHTML = '<div class="section-title">AI对话</div><textarea id="fb-ai-input" placeholder="输入消息让char回复..."></textarea>' +
-            '<button class="btn btn-primary" id="fb-ai-chat"' + (state.selectedChar ? '' : ' disabled') + '>与char对话</button>' +
-            '<div id="fb-ai-result" style="margin-top:8px;font-size:13px;"></div>';
+          aiSection.innerHTML = '<div class="section-title">\u89e6\u53d1AI\u539f\u751f\u56de\u590d</div>' +
+            '<p style="font-size:12px;color:var(--text2);margin:0 0 10px 0;">\u8f93\u5165\u6d88\u606f\u540e\u70b9\u51fb\uff0c\u4f1a\u81ea\u52a8\u8df3\u8f6c\u5230\u4f1a\u8bdd\u5e76\u53d1\u9001\uff0c\u8d70Roche\u5b8c\u6574\u6d41\u7a0b\uff08persona+\u8bb0\u5fc6+\u4e16\u754c\u4e66\uff09</p>' +
+            '<textarea id="fb-ai-input" placeholder="\u8f93\u5165\u8981\u53d1\u9001\u7684\u6d88\u606f..."></textarea>' +
+            '<button class="btn btn-green" id="fb-ai-native"' + dis + '>\u53d1\u9001\u5e76\u89e6\u53d1AI\u56de\u590d</button>' +
+            '<div id="fb-ai-status" style="margin-top:8px;font-size:13px;"></div>';
           root.appendChild(aiSection);
-          aiSection.querySelector('#fb-ai-chat').onclick = function() {
+
+          aiSection.querySelector('#fb-ai-native').onclick = function() {
             var text = aiSection.querySelector('#fb-ai-input').value.trim();
-            if (!text || !state.selectedChar) return;
-            aiSection.querySelector('#fb-ai-result').textContent = '思考中...';
-            roche.ai.chat({ messages: [{ role: 'system', content: state.selectedChar.persona || state.selectedChar.bio || '' }, { role: 'user', content: text }] })
-            .then(function(r) { aiSection.querySelector('#fb-ai-result').textContent = r.text || '(无回复)'; })
-            .catch(function(e) { aiSection.querySelector('#fb-ai-result').textContent = '错误: ' + (e.message || e); });
+            if (!text || !state.conversationId) return;
+            var statusEl = aiSection.querySelector('#fb-ai-status');
+            statusEl.textContent = '\u6b63\u5728\u8df3\u8f6c\u5e76\u53d1\u9001...';
+            triggerNativeReply(state.conversationId, text).then(function() {
+              statusEl.textContent = '\u2705 \u5df2\u53d1\u9001\uff0c\u8bf7\u5728\u804a\u5929\u754c\u9762\u67e5\u770bAI\u56de\u590d';
+              aiSection.querySelector('#fb-ai-input').value = '';
+            }).catch(function(err) {
+              statusEl.textContent = '\u274c ' + err.message;
+            });
           };
 
+          // --- 跳转 ---
+          var navSection = document.createElement('div'); navSection.className = 'section';
+          navSection.innerHTML = '<div class="section-title">\u5bfc\u822a</div>' +
+            '<button class="btn btn-secondary" id="fb-jump"' + dis + '>\u8df3\u8f6c\u5230\u4f1a\u8bdd</button>';
+          root.appendChild(navSection);
+          navSection.querySelector('#fb-jump').onclick = function() {
+            if (state.conversationId) roche.ui.openApp(state.conversationId);
+          };
+
+          // --- 记忆操作 ---
           var memSection = document.createElement('div'); memSection.className = 'section';
-          memSection.innerHTML = '<div class="section-title">记忆操作</div><textarea id="fb-mem-text" placeholder="输入要写入的事实记忆..."></textarea>' +
-            '<button class="btn btn-primary" id="fb-mem-write"' + dis + '>写入事实记忆</button>' +
-            '<button class="btn btn-secondary" id="fb-mem-read"' + dis + '>读取长期记忆</button>' +
+          memSection.innerHTML = '<div class="section-title">\u8bb0\u5fc6\u64cd\u4f5c</div>' +
+            '<textarea id="fb-mem-text" placeholder="\u8f93\u5165\u8981\u5199\u5165\u7684\u4e8b\u5b9e\u8bb0\u5fc6..."></textarea>' +
+            '<button class="btn btn-primary" id="fb-mem-write"' + dis + '>\u5199\u5165\u4e8b\u5b9e\u8bb0\u5fc6</button>' +
+            '<button class="btn btn-secondary" id="fb-mem-read"' + dis + '>\u8bfb\u53d6\u957f\u671f\u8bb0\u5fc6</button>' +
             '<div id="fb-mem-result" style="margin-top:8px;font-size:13px;white-space:pre-wrap;"></div>';
           root.appendChild(memSection);
           memSection.querySelector('#fb-mem-write').onclick = function() {
             var text = memSection.querySelector('#fb-mem-text').value.trim();
             if (!text || !state.conversationId) return;
-            roche.memory.write({ conversationId: state.conversationId, summaryText: text, who: ['用户'], action: text, when: '刚刚', where: '悬浮球插件', source: 'floating-ball' })
-            .then(function() { roche.ui.toast('事实记忆已写入'); memSection.querySelector('#fb-mem-text').value = ''; });
+            roche.memory.write({ conversationId: state.conversationId, summaryText: text, who: ['\u7528\u6237'], action: text, when: '\u521a\u521a', where: '\u60ac\u6d6e\u7403\u63d2\u4ef6', source: 'floating-ball' })
+            .then(function() { roche.ui.toast('\u4e8b\u5b9e\u8bb0\u5fc6\u5df2\u5199\u5165'); memSection.querySelector('#fb-mem-text').value = ''; });
           };
           memSection.querySelector('#fb-mem-read').onclick = function() {
             if (!state.conversationId) return;
-            memSection.querySelector('#fb-mem-result').textContent = '读取中...';
+            memSection.querySelector('#fb-mem-result').textContent = '\u8bfb\u53d6\u4e2d...';
             roche.memory.getLongTerm({ conversationId: state.conversationId, limit: 20 }).then(function(lt) {
               var lines = [];
-              if (lt.core && lt.core.summary) lines.push('[核心] ' + lt.core.summary);
-              (lt.facts || []).forEach(function(f) { lines.push('[事实] ' + (f.summaryText || f.action || f.text || '')); });
-              memSection.querySelector('#fb-mem-result').textContent = lines.length > 0 ? lines.join('\n') : '(无记忆)';
+              if (lt.core && lt.core.summary) lines.push('[\u6838\u5fc3] ' + lt.core.summary);
+              (lt.facts || []).forEach(function(f) { lines.push('[\u4e8b\u5b9e] ' + (f.summaryText || f.action || f.text || '')); });
+              memSection.querySelector('#fb-mem-result').textContent = lines.length > 0 ? lines.join('\n') : '(\u65e0\u8bb0\u5fc6)';
             });
           };
         }
 
-        var floatingBall = null, chatPanel = null;
-
-        function showFloatingBall() {
-          if (floatingBall) return;
-          floatingBall = document.createElement('div'); floatingBall.className = 'fb-ball'; floatingBall.textContent = '💬';
-          var ballX = window.innerWidth - 70, ballY = window.innerHeight / 2;
-          floatingBall.style.left = ballX + 'px'; floatingBall.style.top = ballY + 'px';
-          var isDragging = false, startX, startY, startLeft, startTop;
-          function onDown(x, y) { isDragging = false; startX = x; startY = y; startLeft = ballX; startTop = ballY; }
-          function onMove(x, y) { var dx = x - startX, dy = y - startY; if (Math.abs(dx) > 5 || Math.abs(dy) > 5) isDragging = true; ballX = startLeft + dx; ballY = startTop + dy; floatingBall.style.left = ballX + 'px'; floatingBall.style.top = ballY + 'px'; }
-          function onUp() { if (ballX < window.innerWidth / 2) ballX = 10; else ballX = window.innerWidth - 58; floatingBall.style.left = ballX + 'px'; if (!isDragging) toggleChatPanel(); }
-          floatingBall.addEventListener('mousedown', function(e) { onDown(e.clientX, e.clientY); function m(e2) { onMove(e2.clientX, e2.clientY); } function u() { document.removeEventListener('mousemove', m); document.removeEventListener('mouseup', u); onUp(); } document.addEventListener('mousemove', m); document.addEventListener('mouseup', u); });
-          floatingBall.addEventListener('touchstart', function(e) { var t = e.touches[0]; onDown(t.clientX, t.clientY); function m(e2) { var t2 = e2.touches[0]; onMove(t2.clientX, t2.clientY); } function u() { document.removeEventListener('touchmove', m); document.removeEventListener('touchend', u); onUp(); } document.addEventListener('touchmove', m); document.addEventListener('touchend', u); });
-          document.body.appendChild(floatingBall);
-        }
-
-        function hideFloatingBall() { if (floatingBall) { floatingBall.remove(); floatingBall = null; } hideChatPanel(); }
-        function toggleChatPanel() { if (chatPanel) hideChatPanel(); else showChatPanel(); }
-
-        function showChatPanel() {
-          if (chatPanel || !state.selectedChar) return;
-          chatPanel = document.createElement('div'); chatPanel.className = 'fb-chat-panel'; chatPanel.style.right = '10px'; chatPanel.style.bottom = '70px';
-          var cn = state.selectedChar.handle || state.selectedChar.name || 'Char';
-          chatPanel.innerHTML = '<div class="fb-chat-header"><span style="font-size:14px;font-weight:bold;">' + cn + '</span><span style="cursor:pointer;font-size:18px;" id="fb-chat-close">\u2715</span></div><div class="fb-chat-body" id="fb-chat-body"></div><div class="fb-chat-footer"><input type="text" id="fb-chat-input" placeholder="\u8bf4\u70b9\u4ec0\u4e48..."><button class="btn btn-primary" id="fb-chat-send" style="margin:0;padding:6px 12px;">\u53d1\u9001</button></div>';
-          document.body.appendChild(chatPanel);
-          chatPanel.querySelector('#fb-chat-close').onclick = hideChatPanel;
-          chatPanel.querySelector('#fb-chat-send').onclick = sendChatMessage;
-          chatPanel.querySelector('#fb-chat-input').onkeydown = function(e) { if (e.key === 'Enter') sendChatMessage(); };
-          renderChatMessages();
-        }
-
-        function hideChatPanel() { if (chatPanel) { chatPanel.remove(); chatPanel = null; } }
-
-        function renderChatMessages() {
-          var body = document.getElementById('fb-chat-body'); if (!body) return; body.innerHTML = '';
-          state.chatMessages.forEach(function(m) { var b = document.createElement('div'); b.className = 'fb-bubble ' + (m.isMe ? 'fb-bubble-user' : 'fb-bubble-char'); b.textContent = m.text; body.appendChild(b); });
-          body.scrollTop = body.scrollHeight;
-        }
-
-        function sendChatMessage() {
-          var input = document.getElementById('fb-chat-input'); if (!input) return;
-          var text = input.value.trim(); if (!text || !state.conversationId || !state.selectedChar) return;
-          state.chatMessages.push({ isMe: true, text: text }); renderChatMessages(); input.value = '';
-          var persona = state.selectedChar.persona || state.selectedChar.bio || '';
-          var ctx = state.chatMessages.slice(-10).map(function(m) { return { role: m.isMe ? 'user' : 'assistant', content: m.text }; });
-          roche.ai.chat({ messages: [{ role: 'system', content: persona }].concat(ctx) })
-          .then(function(r) { state.chatMessages.push({ isMe: false, text: r.text || '...' }); renderChatMessages(); })
-          .catch(function(e) { state.chatMessages.push({ isMe: false, text: '[\u9519\u8bef] ' + (e.message || e) }); renderChatMessages(); });
-        }
-
-        function autoTypeAndSend(text) {
-          try {
-            var input = document.querySelector('.chat-input-textarea') || document.querySelector('[contenteditable="true"]') || document.querySelector('textarea');
-            if (!input) { roche.ui.toast('\u627e\u4e0d\u5230\u8f93\u5165\u6846'); return; }
-            input.focus();
-            if (input.tagName === 'TEXTAREA' || input.type === 'text') {
-              var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-              if (setter) setter.call(input, text);
-              input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
-            } else { input.innerText = text; input.dispatchEvent(new Event('input', { bubbles: true })); }
-            setTimeout(function() {
-              var sendBtn = document.querySelector('.chat-input-send') || document.querySelector('.chat-input-send-icon') || document.querySelector('button[class*="send"]');
-              if (sendBtn) sendBtn.click();
-              else input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-              roche.ui.toast('\u6d88\u606f\u5df2\u53d1\u9001');
-            }, 300);
-          } catch(e) { roche.ui.toast('\u53d1\u9001\u5931\u8d25: ' + e.message); }
-        }
-
+        // ========== 初始化 ==========
         roche.storage.get('selectedCharId').then(function(sid) {
-          if (sid) { state.selectedCharId = sid; return roche.character.get(sid).then(function(c) { state.selectedChar = c; state.conversationId = c.conversationId; }).catch(function() {}); }
-        }).then(function() { render(); });
-
-        container._fbState = state;
+          if (sid) {
+            state.selectedCharId = sid;
+            return roche.character.get(sid).then(function(c) {
+              state.selectedChar = c; state.conversationId = c.conversationId;
+            }).catch(function() {});
+          }
+        }).then(function() {
+          render();
+          // 如果之前悬浮球是显示的，恢复它
+          if (state.ballVisible) ensureBall();
+        });
       },
 
       async unmount(container, roche) {
-        document.querySelectorAll('.fb-ball').forEach(function(b) { b.remove(); });
-        document.querySelectorAll('.fb-chat-panel').forEach(function(p) { p.remove(); });
-        var style = document.getElementById('roche-plugin-floating-ball-style'); if (style) style.remove();
+        // 关键：不删除悬浮球！只清理插件设置页面的DOM
+        var style = document.getElementById('roche-plugin-floating-ball-style');
+        // 不删除style，因为悬浮球还需要
         container.replaceChildren();
       }
     }
