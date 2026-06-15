@@ -1,5 +1,5 @@
 /**
- * Roche 悬浮球插件 v2.0.0
+ * Roche 悬浮球插件 v2.1.0
  * 
  * 功能：
  * 1. 悬浮球全局可用（不随插件页面切换消失）
@@ -14,7 +14,7 @@
 window.RochePlugin.register({
   id: "floating-ball",
   name: "悬浮球",
-  version: "2.0.0",
+  version: "2.1.0",
   apps: [
     {
       id: "floating-ball-main",
@@ -202,8 +202,11 @@ window.RochePlugin.register({
         }
 
         function findChatInput() {
-          // 多种选择器尝试，适配不同版本的Roche
+          // 优先使用Roche稳定钩子，再兜底模糊选择器
           var selectors = [
+            '.chat-input-textarea',
+            'textarea.chat-input-textarea',
+            '.chat-input-field textarea',
             'textarea[class*="input"]',
             'textarea[class*="chat"]',
             'textarea[class*="compose"]',
@@ -215,13 +218,19 @@ window.RochePlugin.register({
           ];
           for (var i = 0; i < selectors.length; i++) {
             var el = document.querySelector(selectors[i]);
-            if (el && el.offsetParent !== null) return el; // 确保可见
+            if (el && el.offsetParent !== null) return el;
           }
           return null;
         }
 
         function findSendButton() {
+          // 优先使用Roche稳定钩子
           var selectors = [
+            '.chat-input-send-button',
+            '.chat-input-send',
+            'button.chat-input-send',
+            'button.chat-input-send-button',
+            '.chat-input-send-icon',
             'button[class*="send"]',
             'button[class*="submit"]',
             '[class*="send-icon"]',
@@ -430,7 +439,15 @@ window.RochePlugin.register({
 
         function render() {
           root.innerHTML = '';
-          var h2 = document.createElement('h2'); h2.textContent = '\u60ac\u6d6e\u7403 v2.0'; root.appendChild(h2);
+          var h2 = document.createElement('h2'); h2.textContent = '\u60ac\u6d6e\u7403 v2.1'; root.appendChild(h2);
+
+          // --- 关闭App按钮 ---
+          var closeBtn = document.createElement('button');
+          closeBtn.className = 'btn btn-secondary';
+          closeBtn.textContent = '\u2715 \u5173\u95ed\u63d2\u4ef6';
+          closeBtn.style.cssText = 'margin-bottom:12px;width:100%;';
+          closeBtn.onclick = function() { roche.ui.closeApp(); };
+          root.appendChild(closeBtn);
 
           // --- 选择角色 ---
           var charSection = document.createElement('div'); charSection.className = 'section';
