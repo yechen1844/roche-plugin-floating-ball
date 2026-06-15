@@ -1,5 +1,5 @@
 /**
- * Roche 悬浮球插件 v2.1.0
+ * Roche 悬浮球插件 v2.2.0
  * 
  * 功能：
  * 1. 悬浮球全局可用（不随插件页面切换消失）
@@ -14,7 +14,7 @@
 window.RochePlugin.register({
   id: "floating-ball",
   name: "悬浮球",
-  version: "2.1.0",
+  version: "2.2.0",
   apps: [
     {
       id: "floating-ball-main",
@@ -170,17 +170,40 @@ window.RochePlugin.register({
         }
 
         // ========== 触发AI原生回复（核心功能） ==========
-        // 流程：跳转到会话 → 等待加载 → 找到输入框 → 输入文字 → 点击发送
+        // 流程：关闭插件App → 导航到会话 → 等待加载 → 找到输入框 → 输入文字 → 点击发送
         // 这样走的是Roche完整流程：persona + memory + worldbook + AI回复
+
+        function navigateToConversation(convId) {
+          // 关闭插件App（回到上一页），然后尝试URL hash导航
+          roche.ui.closeApp();
+
+          // 等页面恢复后，尝试多种导航方式
+          setTimeout(function() {
+            // 尝试URL hash导航（Roche是SPA，可能用hash路由）
+            var hash = '#/chat/' + convId;
+            if (window.location.hash !== hash) {
+              window.location.hash = hash;
+            }
+
+            // 也尝试pushState（有些SPA用history模式）
+            var path = '/chat/' + convId;
+            if (window.location.pathname !== path) {
+              try { window.history.pushState({}, '', path); } catch(e) {}
+            }
+
+            // 触发popstate事件让SPA路由响应
+            window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+          }, 300);
+        }
 
         function triggerNativeReply(convId, text) {
           return new Promise(function(resolve, reject) {
-            // 第1步：跳转到会话
-            roche.ui.openApp(convId);
+            // 第1步：关闭插件App并导航到会话
+            navigateToConversation(convId);
 
             // 第2步：等待聊天页面加载，然后找到输入框并发送
             var attempts = 0;
-            var maxAttempts = 20; // 最多等4秒
+            var maxAttempts = 30; // 最多等6秒
 
             function trySend() {
               attempts++;
@@ -193,11 +216,11 @@ window.RochePlugin.register({
               if (attempts < maxAttempts) {
                 setTimeout(trySend, 200);
               } else {
-                reject(new Error('找不到聊天输入框，请确认已打开会话'));
+                reject(new Error('找不到聊天输入框。请手动打开会话后重试，或检查会话ID是否正确'));
               }
             }
 
-            setTimeout(trySend, 500);
+            setTimeout(trySend, 800);
           });
         }
 
@@ -439,7 +462,7 @@ window.RochePlugin.register({
 
         function render() {
           root.innerHTML = '';
-          var h2 = document.createElement('h2'); h2.textContent = '\u60ac\u6d6e\u7403 v2.1'; root.appendChild(h2);
+          var h2 = document.createElement('h2'); h2.textContent = '\u60ac\u6d6e\u7403 v2.2'; root.appendChild(h2);
 
           // --- 关闭App按钮 ---
           var closeBtn = document.createElement('button');
@@ -547,7 +570,7 @@ window.RochePlugin.register({
             '<button class="btn btn-secondary" id="fb-jump"' + dis + '>\u8df3\u8f6c\u5230\u4f1a\u8bdd</button>';
           root.appendChild(navSection);
           navSection.querySelector('#fb-jump').onclick = function() {
-            if (state.conversationId) roche.ui.openApp(state.conversationId);
+            if (state.conversationId) navigateToConversation(state.conversationId);
           };
 
           // --- 记忆操作 ---
