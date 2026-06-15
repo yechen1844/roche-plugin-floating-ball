@@ -1,7 +1,7 @@
 {
   "id": "floating-ball",
   "name": "悬浮球",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "在Roche内显示悬浮球，点击快速与char对话、注入消息、跳转会话、触发AI原生回复",
   "author": "Roche Community",
   "entry": "https://raw.githubusercontent.com/yechen1844/roche-plugin-floating-ball/main/floating-ball.js",
